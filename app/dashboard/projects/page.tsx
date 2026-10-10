@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { projectsApi } from "@/lib/api";
 import type { Project } from "@/lib/types";
@@ -152,16 +152,9 @@ function Spotlight({ children, style, onClick }: {
 
 /* ── Derive lang tags from project data ──────────────────────── */
 
+// Languages detected by Trivy in the project's latest scan
 function getLangs(p: Project): string[] {
-  const langs: string[] = [];
-  if (p.name.includes("go") || p.name.includes("api")) langs.push("Go");
-  else if (p.name.includes("web") || p.name.includes("front")) langs.push("TypeScript", "Node");
-  else if (p.name.includes("billing") || p.name.includes("data") || p.name.includes("pipeline")) langs.push("Python");
-  else if (p.name.includes("terraform") || p.name.includes("infra")) langs.push("Terraform", "IaC");
-  else if (p.name.includes("rust") || p.name.includes("auth")) langs.push("Rust");
-  else langs.push("Docker");
-  if (!langs.includes("Docker") && !["Terraform", "IaC"].some(l => langs.includes(l))) langs.push("Docker");
-  return langs;
+  return p.langs ?? [];
 }
 
 function getGradient(p: Project): string {
@@ -182,15 +175,9 @@ function getGradient(p: Project): string {
 /* ── Project card (grid) ─────────────────────────────────────── */
 
 function ProjectCard({ project: p }: { project: Project }) {
-  const total = p.critical + p.high + p.medium + p.low;
+  const total = p.total;
   const langs = getLangs(p);
-  const { trend, delta } = useMemo<{ trend: number[]; delta: number }>(() => {
-    const base = total;
-    const t = Array.from({ length: 14 }, () => Math.max(0, Math.round(base * (0.6 + Math.random() * 0.5))));
-    const d = p.critical > 0 ? Math.floor(Math.random() * 5) + 1 : -(Math.floor(Math.random() * 4) + 1);
-    return { trend: t, delta: d };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [p.id]);
+  const trend = p.trend ?? [];
   const trendColor = p.critical > 0 ? "var(--sev-critical)" : "var(--accent)";
 
   return (
@@ -207,7 +194,7 @@ function ProjectCard({ project: p }: { project: Project }) {
               </div>
             </div>
           </div>
-          <DeltaBadge delta={p.critical > 0 ? p.critical : -(p.high > 0 ? 1 : 0)}/>
+          <DeltaBadge delta={p.delta ?? 0}/>
         </div>
 
         {/* Stack tags */}
@@ -239,7 +226,7 @@ function ProjectCard({ project: p }: { project: Project }) {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 12, fontSize: 11, color: "var(--fg-dim)" }}>
           <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
             <GitBranch size={11}/>
-            <span style={{ fontFamily: "var(--font-mono)" }}>main</span>
+            <span style={{ fontFamily: "var(--font-mono)" }}>{p.branch ?? "—"}</span>
           </span>
           <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
             <Clock size={11}/>
@@ -348,9 +335,8 @@ export default function ProjectsPage() {
                   ))
                 : filtered.map(p => {
                     const langs = getLangs(p);
-                    const total = p.critical + p.high + p.medium + p.low;
-                    const trend = Array.from({ length: 14 }, () => Math.max(0, Math.round(total * (0.6 + Math.random() * 0.5))));
-                    const delta = p.critical > 0 ? p.critical : -(p.high > 0 ? 1 : 0);
+                    const trend = p.trend ?? [];
+                    const delta = p.delta ?? 0;
                     return (
                       <tr key={p.id}
                         style={{ borderBottom: "1px solid var(--border)", cursor: "pointer", transition: "background 140ms ease" }}

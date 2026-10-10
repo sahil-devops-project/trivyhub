@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { authenticate } from "@/lib/api-middleware";
+import { countsByScan, emptyCounts } from "@/lib/vuln-stats";
 
 export async function GET(req: NextRequest) {
   const claims = await authenticate(req);
@@ -17,8 +18,10 @@ export async function GET(req: NextRequest) {
   const scans = await prisma.scan.findMany({
     where: { projectId: project.id },
     orderBy: { scannedAt: "desc" },
-    include: { vulnerabilities: { select: { severity: true } } },
+    omit: { rawJson: true },
   });
+
+  const counts = await countsByScan(scans.map((s) => s.id));
 
   const result = scans.map((s) => ({
     id: s.id,
@@ -32,11 +35,7 @@ export async function GET(req: NextRequest) {
     commit: s.commit,
     triggered_by: s.triggeredBy,
     langs: JSON.parse(s.langs || "[]"),
-    critical: s.vulnerabilities.filter((v) => v.severity === "CRITICAL").length,
-    high: s.vulnerabilities.filter((v) => v.severity === "HIGH").length,
-    medium: s.vulnerabilities.filter((v) => v.severity === "MEDIUM").length,
-    low: s.vulnerabilities.filter((v) => v.severity === "LOW").length,
-    total: s.vulnerabilities.length,
+    ...(counts.get(s.id) ?? emptyCounts()),
   }));
 
   return NextResponse.json(result);

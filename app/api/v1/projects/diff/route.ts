@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { authenticate } from "@/lib/api-middleware";
+import { serializeVuln } from "@/lib/vuln-stats";
 
 export async function GET(req: NextRequest) {
   const claims = await authenticate(req);
@@ -18,6 +19,7 @@ export async function GET(req: NextRequest) {
     where: { projectId: project.id },
     orderBy: { scannedAt: "desc" },
     take: 2,
+    select: { id: true },
   });
 
   if (scans.length < 2) {
@@ -33,8 +35,8 @@ export async function GET(req: NextRequest) {
   const previousKeys = new Set(previous.map((v) => v.cveId + v.packageName));
 
   return NextResponse.json({
-    new_vulnerabilities: current.filter((v) => !previousKeys.has(v.cveId + v.packageName)),
-    resolved_vulnerabilities: previous.filter((v) => !currentKeys.has(v.cveId + v.packageName)),
+    new_vulnerabilities: current.filter((v) => !previousKeys.has(v.cveId + v.packageName)).map(serializeVuln),
+    resolved_vulnerabilities: previous.filter((v) => !currentKeys.has(v.cveId + v.packageName)).map(serializeVuln),
     previous_scan_id: scans[1].id,
     current_scan_id: scans[0].id,
   });

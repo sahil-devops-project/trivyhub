@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { authenticate } from "@/lib/api-middleware";
+import { countsByScan, emptyCounts } from "@/lib/vuln-stats";
+
+const TREND_SCANS = 14;
 
 export async function GET(req: NextRequest) {
   const claims = await authenticate(req);
@@ -12,21 +15,20 @@ export async function GET(req: NextRequest) {
     include: {
       scans: {
         orderBy: { scannedAt: "desc" },
-        take: 1,
-        select: {
-          scannedAt: true,
-          vulnerabilities: {
-            select: { severity: true },
-          },
-        },
+        take: TREND_SCANS,
+        select: { id: true, scannedAt: true, branch: true, langs: true },
       },
       _count: { select: { scans: true } },
     },
   });
 
+  const counts = await countsByScan(projects.flatMap((p) => p.scans.map((s) => s.id)));
+
   const summaries = projects.map((p) => {
     const lastScan = p.scans[0] ?? null;
-    const vulns = lastScan?.vulnerabilities ?? [];
+    const prevScan = p.scans[1] ?? null;
+    const c = (lastScan && counts.get(lastScan.id)) || emptyCounts();
+    const prevTotal = prevScan ? counts.get(prevScan.id)?.total ?? 0 : c.total;
     return {
       id: p.id,
       organization_id: p.organizationId,
@@ -35,11 +37,13 @@ export async function GET(req: NextRequest) {
       owner: p.owner,
       created_at: p.createdAt,
       last_scan: lastScan?.scannedAt ?? null,
+      branch: lastScan?.branch ?? null,
+      langs: lastScan ? (JSON.parse(lastScan.langs || "[]") as string[]) : [],
       total_scans: p._count.scans,
-      critical: vulns.filter((v) => v.severity === "CRITICAL").length,
-      high: vulns.filter((v) => v.severity === "HIGH").length,
-      medium: vulns.filter((v) => v.severity === "MEDIUM").length,
-      low: vulns.filter((v) => v.severity === "LOW").length,
+      ...c,
+      delta: c.total - prevTotal,
+      // Oldest → newest totals of the most recent scans
+      trend: [...p.scans].reverse().map((s) => counts.get(s.id)?.total ?? 0),
     };
   });
 

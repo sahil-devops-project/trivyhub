@@ -33,11 +33,20 @@ export interface Project {
   owner: string;
   created_at: string;
   last_scan: string | null;
+  branch: string | null;
+  langs: string[];
   total_scans: number;
   critical: number;
   high: number;
   medium: number;
   low: number;
+  unknown: number;
+  total: number;
+  fixable: number;
+  /** change in total vulnerabilities vs. the previous scan */
+  delta: number;
+  /** totals of the most recent scans, oldest → newest */
+  trend: number[];
 }
 
 export interface Vulnerability {
@@ -72,7 +81,9 @@ export interface ScanSummary {
   high: number;
   medium: number;
   low: number;
+  unknown: number;
   total: number;
+  fixable: number;
 }
 
 export interface DiffResult {

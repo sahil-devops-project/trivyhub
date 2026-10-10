@@ -3,6 +3,9 @@ image:
   tag: "latest"
   pullPolicy: IfNotPresent
 
+# For private registries, e.g. [{ name: regcred }]
+imagePullSecrets: []
+
 replicaCount: 1
 
 service:

@@ -71,12 +71,14 @@ export interface VulnPage {
   total: number;
   page: number;
   limit: number;
+  /** per-severity counts, ignoring the severity filter */
+  counts: Partial<Record<string, number>>;
 }
 
 // Vulnerabilities
 export const vulnApi = {
-  list: (page = 1, limit = 100, severity = "", project = "") =>
-    request<VulnPage>(`/api/v1/vulnerabilities?page=${page}&limit=${limit}${severity ? `&severity=${severity}` : ""}${project ? `&project=${encodeURIComponent(project)}` : ""}`),
+  list: (page = 1, limit = 100, severity = "", project = "", q = "") =>
+    request<VulnPage>(`/api/v1/vulnerabilities?page=${page}&limit=${limit}${severity ? `&severity=${severity}` : ""}${project ? `&project=${encodeURIComponent(project)}` : ""}${q ? `&q=${encodeURIComponent(q)}` : ""}`),
 };
 
 // Members

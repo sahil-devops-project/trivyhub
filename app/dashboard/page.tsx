@@ -4,7 +4,7 @@ import Link from "next/link";
 import { RefreshCw, Download, ChevronRight, Copy, Check, GitBranch, ArrowUp } from "lucide-react";
 import { projectsApi, vulnApi } from "@/lib/api";
 import type { Project, Vulnerability, ScanSummary } from "@/lib/types";
-import { format, subDays } from "date-fns";
+import { format, subDays, formatDistanceToNow } from "date-fns";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer,
@@ -116,7 +116,7 @@ function EvoTooltip({ active, payload, label }: { active?: boolean; payload?: { 
   );
 }
 
-interface EvoPoint { date: string; critical: number; high: number; medium: number; }
+interface EvoPoint { date: string; critical: number; high: number; medium: number; low: number; total: number; fixable: number; }
 
 function EvoChart({ data, height = 220 }: { data: EvoPoint[]; height?: number }) {
   const maxVal = Math.max(...data.map(d => Math.max(d.critical, d.high, d.medium)), 1);
@@ -204,7 +204,8 @@ function CopyButton({ text }: { text: string }) {
 
 /* ── Build chart data from scans ─────────────────────────────── */
 
-function buildEvoData(allScans: ScanSummary[]) {
+// For each of the last 14 days, sum the latest scan of every project as of that day.
+function buildEvoData(allScans: ScanSummary[]): EvoPoint[] {
   const days = Array.from({ length: 14 }, (_, i) => subDays(new Date(), 13 - i));
   const sorted = [...allScans].sort((a, b) =>
     new Date(a.scanned_at).getTime() - new Date(b.scanned_at).getTime()
@@ -214,24 +215,21 @@ function buildEvoData(allScans: ScanSummary[]) {
 
   return days.map(day => {
     const dayEnd = format(day, "yyyy-MM-dd");
-    while (scanIdx < sorted.length && sorted[scanIdx].scanned_at.slice(0, 10) <= dayEnd) {
+    while (scanIdx < sorted.length && format(new Date(sorted[scanIdx].scanned_at), "yyyy-MM-dd") <= dayEnd) {
       lastKnown[sorted[scanIdx].project_id] = sorted[scanIdx];
       scanIdx++;
     }
     const vals = Object.values(lastKnown);
+    const sum = (k: "critical" | "high" | "medium" | "low" | "total" | "fixable") => vals.reduce((s, v) => s + v[k], 0);
     return {
       date: format(day, "MMM d"),
-      critical: vals.reduce((s, v) => s + v.critical, 0),
-      high:     vals.reduce((s, v) => s + v.high, 0),
-      medium:   vals.reduce((s, v) => s + v.medium, 0),
+      critical: sum("critical"),
+      high:     sum("high"),
+      medium:   sum("medium"),
+      low:      sum("low"),
+      total:    sum("total"),
+      fixable:  sum("fixable"),
     };
-  });
-}
-
-function buildSparkValues(vulns: Vulnerability[], severity: string) {
-  return Array.from({ length: 14 }, (_, i) => {
-    const dateStr = format(subDays(new Date(), 13 - i), "yyyy-MM-dd");
-    return vulns.filter(v => v.severity === severity && (v.first_seen_at?.slice(0, 10) ?? "9999") <= dateStr).length;
   });
 }
 
@@ -239,16 +237,16 @@ function buildSparkValues(vulns: Vulnerability[], severity: string) {
 
 export default function OverviewPage() {
   const [projects, setProjects] = useState<Project[]>([]);
-  const [vulns, setVulns] = useState<Vulnerability[]>([]);
+  const [topCves, setTopCves] = useState<Vulnerability[]>([]);
   const [allScans, setAllScans] = useState<ScanSummary[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([projectsApi.list(), vulnApi.list(1, 500)])
+    Promise.all([projectsApi.list(), vulnApi.list(1, 5)])
       .then(async ([p, v]) => {
         const projectList = p ?? [];
         setProjects(projectList);
-        setVulns(v?.data ?? []);
+        setTopCves(v?.data ?? []);
         // Load scans for all projects in parallel for the evolution chart
         const scanArrays = await Promise.all(
           projectList.map(proj => projectsApi.scans(proj.name).catch(() => []))
@@ -258,33 +256,33 @@ export default function OverviewPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  const critical = vulns.filter(v => v.severity === "CRITICAL").length;
-  const high     = vulns.filter(v => v.severity === "HIGH").length;
-  const medium   = vulns.filter(v => v.severity === "MEDIUM").length;
-  const low      = vulns.filter(v => v.severity === "LOW").length;
-  const total    = critical + high + medium + low;
-  const unfixed  = vulns.filter(v => !v.is_fixed).length;
+  // Totals = latest scan of every project (same scope as the Vulnerabilities page)
+  const sumProjects = (k: "critical" | "high" | "medium" | "low" | "unknown" | "total" | "fixable") =>
+    projects.reduce((s, p) => s + (p[k] ?? 0), 0);
+  const critical = sumProjects("critical");
+  const high     = sumProjects("high");
+  const medium   = sumProjects("medium");
+  const low      = sumProjects("low");
+  const unknown  = sumProjects("unknown");
+  const total    = sumProjects("total");
+  const fixable  = sumProjects("fixable");
+  const noFix    = total - fixable;
 
   const evoData = buildEvoData(allScans);
-  const sparkCritical = buildSparkValues(vulns, "CRITICAL");
-  const sparkHigh     = buildSparkValues(vulns, "HIGH");
-  const sparkMedium   = buildSparkValues(vulns, "MEDIUM");
-  const sparkLow      = buildSparkValues(vulns, "LOW");
-
-  const SEV_ORDER: Record<string, number> = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
-  const topCves = [...vulns]
-    .sort((a, b) => (SEV_ORDER[b.severity] ?? 0) - (SEV_ORDER[a.severity] ?? 0))
-    .slice(0, 5);
+  const sparkTotal    = evoData.map(d => d.total);
+  const sparkCritical = evoData.map(d => d.critical);
+  const sparkHigh     = evoData.map(d => d.high);
+  const sparkFixable  = evoData.map(d => d.fixable);
 
   const topRisk = [...projects]
     .sort((a, b) => (b.critical * 10 + b.high * 3 + b.medium) - (a.critical * 10 + a.high * 3 + a.medium))
     .slice(0, 5);
 
   const kpis = [
-    { eyebrow: "Total",    value: loading ? "—" : total,    label: "Vulnerabilities",   sub: `${projects.length} projects`,  spark: [...sparkCritical.map((v,i) => v + sparkHigh[i] + sparkMedium[i] + sparkLow[i])], color: "var(--fg-muted)" },
+    { eyebrow: "Total",    value: loading ? "—" : total,    label: "Vulnerabilities",   sub: `${projects.length} projects`,  spark: sparkTotal, color: "var(--fg-muted)" },
     { eyebrow: "Critical", value: loading ? "—" : critical, label: "Critical open",     sub: "Immediate action",             spark: sparkCritical, color: SEV_CSS.critical, alert: critical > 0 },
-    { eyebrow: "High",     value: loading ? "—" : high,     label: "High severity",     sub: `${medium} medium · ${low} low`, spark: sparkHigh,    color: SEV_CSS.high },
-    { eyebrow: "Unfixed",  value: loading ? "—" : unfixed,  label: "Awaiting fix",      sub: `${vulns.length - unfixed} resolved`, spark: sparkLow, color: "var(--fg-muted)" },
+    { eyebrow: "High",     value: loading ? "—" : high,     label: "High severity",     sub: `${medium} medium · ${low} low${unknown ? ` · ${unknown} unknown` : ""}`, spark: sparkHigh, color: SEV_CSS.high },
+    { eyebrow: "Fixable",  value: loading ? "—" : fixable,  label: "Fix available",     sub: `${noFix} without a fix`,       spark: sparkFixable, color: "var(--fg-muted)" },
   ];
 
   const ciSnippet = `- name: "Scan with Trivy"
@@ -293,13 +291,16 @@ export default function OverviewPage() {
     project: my-service
     api-key: \${{ secrets.TRIVIHUB_KEY }}`;
 
-  const recentActivity = [
-    { color: "var(--accent)",        text: "Scan completed on ",   target: projects[0]?.name ?? "—",    sub: "main branch · just now" },
-    { color: "var(--sev-critical)",  text: "New Critical CVE: ",   target: "CVE-2024-32002",            sub: "Git RCE — review immediately" },
-    { color: "var(--accent)",        text: "Fixed: ",              target: "CVE-2023-39325",            sub: "x/net upgraded" },
-    { color: "var(--sev-high)",      text: "EPSS > 0.7: ",        target: "CVE-2024-21626",            sub: "runc container escape" },
-    { color: "var(--fg-faint)",      text: "Scan completed on ",   target: projects[1]?.name ?? "—",    sub: "3 hours ago" },
-  ];
+  const projectNames = Object.fromEntries(projects.map(p => [p.id, p.name]));
+  const recentActivity = [...allScans]
+    .sort((a, b) => new Date(b.scanned_at).getTime() - new Date(a.scanned_at).getTime())
+    .slice(0, 5)
+    .map(s => ({
+      color:  s.critical > 0 ? "var(--sev-critical)" : s.high > 0 ? "var(--sev-high)" : "var(--accent)",
+      text:   "Scan completed on ",
+      target: projectNames[s.project_id] ?? "—",
+      sub:    `${s.branch ?? "—"} · ${formatDistanceToNow(new Date(s.scanned_at), { addSuffix: true })} · ${s.total} vulns${s.critical ? ` (${s.critical} critical)` : ""}`,
+    }));
 
   return (
     <div style={{ padding: "28px 32px", maxWidth: 1480, margin: "0 auto", animation: "page-in 320ms cubic-bezier(0.2,0.7,0.2,1)" }}>
@@ -355,7 +356,7 @@ export default function OverviewPage() {
             <div>
               <div style={{ fontSize: 13, color: "var(--fg-muted)", fontWeight: 500 }}>Vulnerability evolution</div>
               <div style={{ fontSize: 11.5, color: "var(--fg-dim)", marginTop: 2 }}>
-                Active vulnerabilities per project scan · stacked by severity · last 14 days
+                Latest scan of each project, summed per day · last 14 days
               </div>
             </div>
             <div style={{ display: "flex", gap: 14 }}>
@@ -393,6 +394,7 @@ export default function OverviewPage() {
               { label: "High",     v: high,     color: SEV_CSS.high },
               { label: "Medium",   v: medium,   color: SEV_CSS.medium },
               { label: "Low",      v: low,      color: SEV_CSS.low },
+              ...(unknown ? [{ label: "Unknown", v: unknown, color: "var(--fg-faint)" }] : []),
             ]).map(s => {
               const pct = total ? (s.v / total) * 100 : 0;
               return (
@@ -416,12 +418,12 @@ export default function OverviewPage() {
           <div style={{ height: 1, background: "var(--border)", margin: "16px 0" }}/>
           <div style={{ display: "flex", justifyContent: "space-between" }}>
             <div>
-              <div style={{ color: "var(--fg-dim)", fontSize: 11 }}>Unfixed</div>
-              <div style={{ fontFamily: "var(--font-mono)", fontSize: 16, fontWeight: 600, marginTop: 2, color: "var(--sev-critical)" }}>{unfixed}</div>
+              <div style={{ color: "var(--fg-dim)", fontSize: 11 }}>No fix yet</div>
+              <div style={{ fontFamily: "var(--font-mono)", fontSize: 16, fontWeight: 600, marginTop: 2, color: "var(--sev-critical)" }}>{noFix}</div>
             </div>
             <div style={{ textAlign: "right" }}>
-              <div style={{ color: "var(--fg-dim)", fontSize: 11 }}>Fixed</div>
-              <div style={{ fontFamily: "var(--font-mono)", fontSize: 16, fontWeight: 600, marginTop: 2, color: "var(--accent)" }}>{vulns.length - unfixed}</div>
+              <div style={{ color: "var(--fg-dim)", fontSize: 11 }}>Fix available</div>
+              <div style={{ fontFamily: "var(--font-mono)", fontSize: 16, fontWeight: 600, marginTop: 2, color: "var(--accent)" }}>{fixable}</div>
             </div>
           </div>
         </Spotlight>
@@ -442,8 +444,6 @@ export default function OverviewPage() {
               : topRisk.length === 0
                 ? <div style={{ padding: "24px 0", textAlign: "center", color: "var(--fg-dim)", fontSize: 13 }}>No projects yet</div>
                 : topRisk.map(p => {
-                    const total = p.critical + p.high + p.medium + p.low;
-                    const delta = 0;
                     return (
                       <Link
                         key={p.id}
@@ -483,7 +483,10 @@ export default function OverviewPage() {
             </div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            {recentActivity.filter(a => a.target && a.target !== "—").map((a, i) => (
+            {!loading && recentActivity.length === 0 && (
+              <div style={{ padding: "24px 0", textAlign: "center", color: "var(--fg-dim)", fontSize: 13 }}>No scans yet</div>
+            )}
+            {recentActivity.map((a, i) => (
               <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
                 <div style={{
                   width: 8, height: 8, borderRadius: "50%", background: a.color, marginTop: 5, flexShrink: 0,
@@ -517,7 +520,7 @@ export default function OverviewPage() {
                 : topCves.map(v => (
                     <Link
                       key={v.id}
-                      href={`/dashboard/vulnerabilities/${encodeURIComponent(v.cve_id)}`}
+                      href={`/dashboard/vulnerabilities?q=${encodeURIComponent(v.cve_id)}`}
                       style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 8px", borderRadius: 8, cursor: "pointer", textDecoration: "none", transition: "background 140ms ease" }}
                       onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = "var(--surface-2)"}
                       onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = "transparent"}
@@ -531,7 +534,7 @@ export default function OverviewPage() {
                           <SevChip level={v.severity}/>
                         </div>
                         <div style={{ fontSize: 12, color: "var(--fg-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 2 }}>
-                          {v.title ?? v.package_name}
+                          {v.title || v.package_name}
                         </div>
                       </div>
                       <ChevronRight size={12} style={{ color: "var(--fg-faint)", flexShrink: 0 }}/>

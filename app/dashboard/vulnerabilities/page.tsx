@@ -43,26 +43,37 @@ const SEV_ACTIVE: Record<Severity, { bg: string; color: string }> = {
 export default function VulnerabilitiesPage() {
   const [vulns, setVulns] = useState<Vulnerability[]>([]);
   const [total, setTotal] = useState(0);
+  const [counts, setCounts] = useState<Partial<Record<string, number>>>({});
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [query, setQuery] = useState("");
   const [sevFilter, setSevFilter] = useState<Severity | "ALL">("ALL");
   const [projectFilter, setProjectFilter] = useState("");
   const [projects, setProjects] = useState<Project[]>([]);
 
-  useEffect(() => { projectsApi.list().then(p => setProjects(p ?? [])); }, []);
+  useEffect(() => {
+    projectsApi.list().then(p => setProjects(p ?? []));
+    // Pre-fill search from ?q= (e.g. links from the overview page)
+    const q = new URLSearchParams(window.location.search).get("q") ?? "";
+    if (q) { setSearch(q); setQuery(q); }
+  }, []);
+
+  // Debounce the search box before querying the server
+  useEffect(() => {
+    const t = setTimeout(() => { setQuery(search.trim()); setPage(1); }, 300);
+    return () => clearTimeout(t);
+  }, [search]);
 
   useEffect(() => {
     setLoading(true);
-    vulnApi.list(page, 100, sevFilter === "ALL" ? "" : sevFilter, projectFilter)
-      .then(v => { setVulns(v?.data ?? []); setTotal(v?.total ?? 0); })
+    vulnApi.list(page, 100, sevFilter === "ALL" ? "" : sevFilter, projectFilter, query)
+      .then(v => { setVulns(v?.data ?? []); setTotal(v?.total ?? 0); setCounts(v?.counts ?? {}); })
       .finally(() => setLoading(false));
-  }, [page, sevFilter, projectFilter]);
+  }, [page, sevFilter, projectFilter, query]);
 
-  const filtered = vulns.filter(v => {
-    const q = search.toLowerCase();
-    return !q || v.cve_id.toLowerCase().includes(q) || v.package_name.toLowerCase().includes(q) || (v.title ?? "").toLowerCase().includes(q);
-  });
+  const filtered = vulns;
+  const allCount = Object.values(counts).reduce<number>((s, n) => s + (n ?? 0), 0);
 
   const totalPages = Math.ceil(total / 100);
 
@@ -96,7 +107,7 @@ export default function VulnerabilitiesPage() {
             boxShadow: sevFilter === "ALL" ? "0 0 0 1px oklch(0.78 0.18 130), 0 4px 12px -4px var(--accent-glow)" : "none",
           }}
         >
-          All <span style={{ fontFamily: "var(--font-mono)", opacity: 0.7, marginLeft: 4 }}>{total}</span>
+          All <span style={{ fontFamily: "var(--font-mono)", opacity: 0.7, marginLeft: 4 }}>{allCount}</span>
         </button>
         {SEVERITIES.map(s => {
           const active = sevFilter === s;
@@ -111,7 +122,7 @@ export default function VulnerabilitiesPage() {
                 borderColor: active ? c.color : "var(--border)",
               }}
             >
-              {s}
+              {s} <span style={{ fontFamily: "var(--font-mono)", opacity: 0.7, marginLeft: 4 }}>{counts[s] ?? 0}</span>
             </button>
           );
         })}
